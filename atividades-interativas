@@ -1,0 +1,451 @@
+import React, { useEffect, useMemo, useState } from "react";
+
+/**
+ * Beyond Fluency – Interactive Lesson Template
+ * -------------------------------------------------
+ * Single-file React component (TailwindCSS) for drag‑and‑drop lesson tasks.
+ * Designed to be hosted (e.g., Vercel/Netlify) and embedded in Notion/Gamma via a link.
+ *
+ * Core ideas baked in (your new standard):
+ *  - Title with generative topic
+ *  - Understanding Goal (student perspective)
+ *  - 3 Tasks hierarchy (Controlled → Comprehension Performance → Flexible Use)
+ *  - Reflection Card (Guided → Self → Mini-task performática em aula)
+ *  - MindMap (Notice / Remember / Try + cultural insight)
+ *
+ * Features
+ *  - Drag & drop board (HTML5) for Task 2/3 classification activities
+ *  - Editable text everywhere (click to edit)
+ *  - Presets for common lesson types (Persuasion, Passive Voice Spotlight, Agree/Disagree)
+ *  - "One example only" mode: shows just a single model from teacher
+ *  - Local autosave (per URL) + reset
+ *  - Export to Markdown (copy → paste into Notion)
+ *  - Optional "Back to slides" button (set a URL below)
+ */
+
+// ---------- Utilities ----------
+const uid = () => Math.random().toString(36).slice(2, 9);
+const cls = (...s) => s.filter(Boolean).join(" ");
+
+// Local Storage helpers (key is derived from location.href)
+const lsKey = (suffix) => `bf_template_${suffix}_${typeof window !== 'undefined' ? location.href : ''}`;
+const saveLS = (k, v) => localStorage.setItem(lsKey(k), JSON.stringify(v));
+const readLS = (k, fallback) => {
+  try { const v = localStorage.getItem(lsKey(k)); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+};
+
+// ---------- Editable text primitive ----------
+function Editable({ value, onChange, placeholder = "", className = "" }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => setDraft(value || ""), [value]);
+  return (
+    <div className={cls("group", className)}>
+      {!editing ? (
+        <div
+          className={cls(
+            "min-h-[1.75rem] leading-snug cursor-text",
+            value ? "" : "text-gray-400"
+          )}
+          onClick={() => setEditing(true)}
+        >
+          {value || placeholder}
+        </div>
+      ) : (
+        <textarea
+          autoFocus
+          className="w-full rounded-md border border-gray-300 p-2 text-sm outline-none focus:border-gray-400"
+          value={draft}
+          rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => { onChange(draft.trim()); setEditing(false); }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { setEditing(false); setDraft(value || ""); }
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "enter") { onChange(draft.trim()); setEditing(false); }
+          }}
+          placeholder={placeholder}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- Drag & Drop Board ----------
+function DnDBoard({ columns, setColumns, items, setItems, title }) {
+  // items: {id, text}
+  // columns: [{id, title, itemIds: []}]
+
+  const onDragStart = (e, id) => { e.dataTransfer.setData("text/plain", id); };
+  const onDrop = (e, columnId) => {
+    const id = e.dataTransfer.getData("text/plain");
+    setColumns((cols) => cols.map(c => c.id === columnId ? { ...c, itemIds: [...new Set([...c.itemIds.filter(x=>x!==id), id])]} : { ...c, itemIds: c.itemIds.filter(x => x !== id) }));
+  };
+  const allow = (e) => e.preventDefault();
+
+  const unassigned = useMemo(() => {
+    const assigned = new Set(columns.flatMap(c => c.itemIds));
+    return Object.values(items).filter(it => !assigned.has(it.id));
+  }, [columns, items]);
+
+  const renameColumn = (id, text) => setColumns(cols => cols.map(c => c.id === id ? { ...c, title: text } : c));
+  const renameItem = (id, text) => setItems(its => ({ ...its, [id]: { ...its[id], text }}));
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="md:col-span-1">
+        <div className="rounded-2xl border p-3 shadow-sm bg-white">
+          <div className="text-sm font-semibold mb-2">Unassigned</div>
+          <div className="space-y-2 min-h-[120px]">
+            {unassigned.length === 0 && <div className="text-xs text-gray-400">Drag items here to remove from a column.</div>}
+            {unassigned.map(it => (
+              <div key={it.id}
+                   draggable
+                   onDragStart={(e)=>onDragStart(e,it.id)}
+                   className="rounded-xl border p-2 text-sm hover:bg-gray-50 cursor-move">
+                <Editable value={it.text} onChange={(t)=>renameItem(it.id,t)} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {columns.map(col => (
+        <div key={col.id}
+             onDrop={(e)=>onDrop(e,col.id)}
+             onDragOver={allow}
+             className="rounded-2xl border p-3 shadow-sm bg-white min-h-[220px]">
+          <div className="flex items-center gap-2 mb-2">
+            <Editable className="flex-1 font-semibold" value={col.title} onChange={(t)=>renameColumn(col.id,t)} />
+            <button onClick={()=>setColumns(cs=>cs.filter(c=>c.id!==col.id))}
+                    className="text-xs px-2 py-1 rounded-md border hover:bg-gray-50">Remove</button>
+          </div>
+          <div className="space-y-2">
+            {col.itemIds.map(id => (
+              <div key={id}
+                   draggable
+                   onDragStart={(e)=>onDragStart(e,id)}
+                   className="rounded-xl border p-2 text-sm hover:bg-gray-50 cursor-move">
+                <Editable value={items[id]?.text} onChange={(t)=>renameItem(id,t)} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- Presets ----------
+const PRESETS = {
+  persuasion: {
+    title: "What makes people say yes?",
+    goal: "Understand how to choose intention, purpose, and emotion when persuading, so you can convince partners, clients, and investors in real situations.",
+    guiding: "What changes when you aim to inspire, to reassure, or to convince with facts?",
+    warmup: "Imagine three contexts: investors, clients, and your team. Which intention works best in each?",
+    inputModels: [
+      { label: "Inspire", text: "This project will transform the way we…" },
+      { label: "Reassure", text: "You can be certain that…" },
+      { label: "Convince (facts)", text: "The data clearly shows…" },
+      { label: "Urgency", text: "We must act now because…" }
+    ],
+    columns: ["Inspire", "Reassure", "Convince with facts", "Urgency"],
+    items: [
+      "This solution will change how we work.",
+      "You can be certain the risks are limited.",
+      "The numbers clearly prove ROI in 3 months.",
+      "We must decide today to seize the opportunity.",
+      "This will make the team proud and motivated.",
+      "You can be sure support is available 24/7.",
+    ],
+    notice: "In ‘he persuades’, the -s is agreement (he/she/it), not plural.",
+    remember: "Persuade ≠ say — it means changing someone’s mind.",
+    tryList: [
+      "Negotiating a car price (ask for a discount)",
+      "Convincing a partner to join a project",
+      "Defending your idea in a discussion",
+      "Pitching to new clients or investors"
+    ],
+    culture: "Too much persuasion may sound ‘pushy’. Balance tone with respect."
+  },
+  passive: {
+    title: "Who’s in the spotlight? (Passive Voice)",
+    goal: "Understand when to shift focus from the doer to the result, so you can sound clear and professional in reports and updates.",
+    guiding: "When is the action more important than the agent?",
+    warmup: "Show two versions of the same event and decide which word gets the spotlight.",
+    inputModels: [
+      { label: "Model", text: "They postponed the meeting → The meeting was postponed." }
+    ],
+    columns: ["Action/result first", "Agent matters"],
+    items: [
+      "The report was approved.",
+      "Finance approved the budget.",
+      "Two bugs were fixed yesterday.",
+      "QA found three issues.",
+    ],
+    notice: "Form: be + past participle; keep tense with ‘be’.",
+    remember: "Passive highlights the result/receiver; active highlights the doer.",
+    tryList: [
+      "Status reports",
+      "News headlines",
+      "Meeting summaries"
+    ],
+    culture: "Overusing passive may feel evasive in English; use intentionally."
+  },
+  agree: {
+    title: "Say it naturally (Agree & Disagree)",
+    goal: "Understand how to agree and disagree politely using tag questions and so/neither/either, so you can keep conversations smooth.",
+    guiding: "How can I show agreement or disagreement without sounding rude?",
+    warmup: "React to opinions with short, natural responses.",
+    inputModels: [
+      { label: "Agree", text: "So do I. / Me too." },
+      { label: "Disagree", text: "I don’t think so. / I’m not sure about that." },
+      { label: "Tag", text: "It’s helpful, isn’t it?" }
+    ],
+    columns: ["Agree", "Disagree", "Hedge / soften"],
+    items: [
+      "I totally agree with that.",
+      "I’m not sure that’s true.",
+      "You might be right.",
+      "So do I.",
+      "Neither do I.",
+    ],
+    notice: "Rising vs falling intonation changes meaning in tag questions.",
+    remember: "Disagree politely: soften with hedges (maybe, might, I’m not sure).",
+    tryList: ["Meetings", "Brainstorms", "Small talk"],
+    culture: "Direct disagreement can sound harsh; soften with tone + hedges."
+  }
+};
+
+// ---------- Main Component ----------
+export default function BeyondFluencyInteractive() {
+  // Top meta
+  const [student, setStudent] = useState(readLS("student","Edson"));
+  const [dateStr, setDateStr] = useState(readLS("date", new Date().toISOString().slice(0,10)));
+  const [presetKey, setPresetKey] = useState(readLS("preset","persuasion"));
+  const preset = PRESETS[presetKey];
+
+  // Editable lesson texts
+  const [titleTopic, setTitleTopic] = useState(readLS("topic", preset.title));
+  const [goal, setGoal] = useState(readLS("goal", preset.goal));
+  const [guiding, setGuiding] = useState(readLS("guiding", preset.guiding));
+  const [warmup, setWarmup] = useState(readLS("warmup", preset.warmup));
+  const [backUrl, setBackUrl] = useState(readLS("backurl", ""));
+
+  // Input (one example only is encouraged; allow hiding extra)
+  const [inputModels, setInputModels] = useState(readLS("models", preset.inputModels));
+
+  // Board state
+  const initialCols = useMemo(()=> preset.columns.map(t => ({ id: uid(), title: t, itemIds: [] })), [presetKey]);
+  const initialItems = useMemo(()=> Object.fromEntries(preset.items.map(txt => { const id = uid(); return [id, {id, text: txt}] })), [presetKey]);
+  const [columns, setColumns] = useState(readLS("cols", initialCols));
+  const [items, setItems] = useState(readLS("items", initialItems));
+
+  // Reflection & MindMap
+  const [guidedQs, setGuidedQs] = useState(readLS("guidedQs", [
+    "Which strategy felt hardest today? Why?",
+    "Which intention felt most natural? Why?"
+  ]));
+  const [mindNotice, setMindNotice] = useState(readLS("notice", preset.notice));
+  const [mindRemember, setMindRemember] = useState(readLS("remember", preset.remember));
+  const [mindTry, setMindTry] = useState(readLS("try", preset.tryList.join("\n")));
+  const [mindCulture, setMindCulture] = useState(readLS("culture", preset.culture));
+
+  // Autosave
+  useEffect(()=>{ saveLS("student",student); },[student]);
+  useEffect(()=>{ saveLS("date",dateStr); },[dateStr]);
+  useEffect(()=>{ saveLS("preset",presetKey); },[presetKey]);
+  useEffect(()=>{ saveLS("topic",titleTopic); },[titleTopic]);
+  useEffect(()=>{ saveLS("goal",goal); },[goal]);
+  useEffect(()=>{ saveLS("guiding",guiding); },[guiding]);
+  useEffect(()=>{ saveLS("warmup",warmup); },[warmup]);
+  useEffect(()=>{ saveLS("backurl",backUrl); },[backUrl]);
+  useEffect(()=>{ saveLS("models",inputModels); },[inputModels]);
+  useEffect(()=>{ saveLS("cols",columns); },[columns]);
+  useEffect(()=>{ saveLS("items",items); },[items]);
+  useEffect(()=>{ saveLS("guidedQs",guidedQs); },[guidedQs]);
+  useEffect(()=>{ saveLS("notice",mindNotice); },[mindNotice]);
+  useEffect(()=>{ saveLS("remember",mindRemember); },[mindRemember]);
+  useEffect(()=>{ saveLS("try",mindTry); },[mindTry]);
+  useEffect(()=>{ saveLS("culture",mindCulture); },[mindCulture]);
+
+  const resetToPreset = () => {
+    setTitleTopic(preset.title);
+    setGoal(preset.goal);
+    setGuiding(preset.guiding);
+    setWarmup(preset.warmup);
+    setInputModels(preset.inputModels);
+    const cols = preset.columns.map(t => ({ id: uid(), title: t, itemIds: [] }));
+    setColumns(cols);
+    const its = Object.fromEntries(preset.items.map(txt => { const id = uid(); return [id, {id, text: txt}] }));
+    setItems(its);
+    setMindNotice(preset.notice);
+    setMindRemember(preset.remember);
+    setMindTry(preset.tryList.join("\n"));
+    setMindCulture(preset.culture);
+  };
+
+  const addColumn = () => setColumns(cols => [...cols, { id: uid(), title: "New column", itemIds: [] }]);
+  const addItem = () => setItems(its => { const id = uid(); return { ...its, [id]: { id, text: "New item" } }; });
+
+  const exportMarkdown = () => {
+    const colDump = columns.map(c => `### ${c.title}\n` + c.itemIds.map(id => `- ${items[id]?.text || ""}`).join("\n")).join("\n\n");
+    const md = `# ${titleTopic}\n\n**Beyond Fluency | ${student} | ${dateStr}**\n\n**Understanding Goal**\n${goal}\n\n**Guiding Question & Warm-up**\n- ${guiding}\n- Context: ${warmup}\n\n**Short Input (one model each)**\n${inputModels.map(m=>`- ${m.label ? `**${m.label}:** `: "- "}${m.text}`).join("\n")}\n\n**Task 1 – Controlled Practice**\n(Use the model(s) above; students produce their own).\n\n**Task 2 – Comprehension Performance**\n(Classify/produce according to the goal; see board below.)\n\n**Task 3 – Flexible Use**\n(Transfer to a new context.)\n\n${colDump}\n\n**Reflection**\n- Guided: ${guidedQs.join(" | ")}\n- Self: What do I still need to practice? / What do I know for sure? / What have I understood? / What can I perform in different contexts?\n- Mini-task: Say or write one real sentence you will use this week and explain why.\n\n**MindMap – Notice / Remember / Try**\n- Notice: ${mindNotice}\n- Remember: ${mindRemember}\n- Try:\n${mindTry.split("\n").map(x=>`  - ${x}`).join("\n")}\n- Cultural insight: ${mindCulture}\n`;
+    navigator.clipboard.writeText(md).then(()=> alert("Markdown copied! Paste it in Notion."));
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-900 p-4 md:p-8">
+      <div className="mx-auto max-w-6xl space-y-6">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-gray-500">Beyond Fluency – Interactive</div>
+            <h1 className="text-2xl md:text-3xl font-bold">
+              <Editable value={`Beyond Fluency | ${student} | ${dateStr} | ${titleTopic}`} onChange={(t)=>{
+                // split-safe: allow editing full line or just topic
+                const parts = t.split("|").map(s=>s.trim());
+                if (parts.length >= 4) {
+                  setStudent(parts[1]);
+                  setDateStr(parts[2]);
+                  setTitleTopic(parts.slice(3).join(" | "));
+                } else {
+                  setTitleTopic(t);
+                }
+              }} />
+            </h1>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <select value={presetKey} onChange={(e)=>setPresetKey(e.target.value)} className="rounded-md border px-2 py-1 text-sm">
+              {Object.keys(PRESETS).map(k=> <option key={k} value={k}>{k}</option>)}
+            </select>
+            <button onClick={resetToPreset} className="rounded-md border px-3 py-1.5 text-sm hover:bg-white">Reset preset</button>
+            <button onClick={addColumn} className="rounded-md border px-3 py-1.5 text-sm hover:bg-white">Add column</button>
+            <button onClick={addItem} className="rounded-md border px-3 py-1.5 text-sm hover:bg-white">Add item</button>
+            <button onClick={exportMarkdown} className="rounded-md border px-3 py-1.5 text-sm hover:bg-white">Copy as Markdown</button>
+          </div>
+        </div>
+
+        {/* Goal */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-2">🎯 Understanding Goal (student perspective)</h2>
+          <Editable value={goal} onChange={setGoal} placeholder="Understand how/when/that… so you can…" />
+        </section>
+
+        {/* Guiding + Warm-up */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-2">❓ Guiding Question + 🧠 Warm-up (with real context)</h2>
+          <Editable value={guiding} onChange={setGuiding} placeholder="Guiding question…" />
+          <div className="h-2" />
+          <Editable value={warmup} onChange={setWarmup} placeholder="Warm-up context…" />
+        </section>
+
+        {/* Short Input (one example only) */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-2">📥 Short Input (one model per function)</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {inputModels.map((m, i) => (
+              <div key={i} className="rounded-xl border p-3">
+                <Editable value={m.label} onChange={(t)=>{
+                  setInputModels(arr=> arr.map((x,ix)=> ix===i? {...x, label:t}: x));
+                }} placeholder="Label (e.g., Inspire)" className="font-medium" />
+                <Editable value={m.text} onChange={(t)=>{
+                  setInputModels(arr=> arr.map((x,ix)=> ix===i? {...x, text:t}: x));
+                }} placeholder="Model sentence" />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Tasks overview */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-3">🧩 Tasks (hierarchy)</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Task 1 – Controlled Practice</div>
+              <div className="text-gray-600">Practice the input (teacher gives one example; student creates the rest).</div>
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Task 2 – Comprehension Performance</div>
+              <div className="text-gray-600">Perform the lesson goal (e.g., classify intentions; produce lines matching purpose & emotion).</div>
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Task 3 – Flexible Use</div>
+              <div className="text-gray-600">Transfer to a new context (e.g., negotiate a car price, social context, family, etc.).</div>
+            </div>
+          </div>
+        </section>
+
+        {/* DnD Board for Task 2/3 */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-3">Drag & Drop Board (use for Task 2/3)</h2>
+          <DnDBoard columns={columns} setColumns={setColumns} items={items} setItems={setItems} title="Board" />
+        </section>
+
+        {/* Reflection */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-2">🌈 Reflection (in-class)</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border p-3">
+              <div className="font-medium mb-2">Guided (gaps)</div>
+              {guidedQs.map((q, i)=> (
+                <Editable key={i} value={q} onChange={(t)=> setGuidedQs(arr => arr.map((x,ix)=> ix===i? t: x))} />
+              ))}
+              <button onClick={()=> setGuidedQs(arr=> [...arr, "New guided question…"])} className="mt-2 text-xs px-2 py-1 rounded-md border">Add question</button>
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="font-medium mb-2">Self-questioning (student)</div>
+              <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1">
+                <li>What do I still need to practice?</li>
+                <li>What do I know for sure?</li>
+                <li>What have I understood?</li>
+                <li>What can I perform in different contexts?</li>
+              </ul>
+              <div className="mt-3 text-sm">
+                <div className="font-medium">Mini-task (perform now)</div>
+                <div>Say/write one real sentence you will use this week and explain why you chose those words.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* MindMap */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm border">
+          <h2 className="font-semibold mb-2">🧠 MindMap – Notice / Remember / Try</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Notice (mini insight on form)</div>
+              <Editable value={mindNotice} onChange={setMindNotice} />
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Remember (meaning/nuance)</div>
+              <Editable value={mindRemember} onChange={setMindRemember} />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Try (contexts – one per line)</div>
+              <Editable value={mindTry} onChange={setMindTry} placeholder={"Negotiating a car price\nConvincing a partner\nFamily / social context"} />
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="font-medium">Cultural insight</div>
+              <Editable value={mindCulture} onChange={setMindCulture} />
+            </div>
+          </div>
+        </section>
+
+        {/* Footer / Back link */}
+        <div className="flex items-center justify-between text-sm text-gray-600">
+          <div className="flex items-center gap-2">
+            <span>Back to slides URL:</span>
+            <input value={backUrl} onChange={(e)=>setBackUrl(e.target.value)} placeholder="https://…"
+                   className="w-72 rounded-md border px-2 py-1" />
+          </div>
+          {backUrl && (
+            <a href={backUrl} className="rounded-md border px-3 py-1.5 hover:bg-white" target="_blank" rel="noreferrer">⬅ Back to slides</a>
+          )}
+        </div>
+
+        <div className="text-center text-xs text-gray-400 pt-6 pb-2">© Beyond Fluency – Interactive Template</div>
+      </div>
+    </div>
+  );
+}
